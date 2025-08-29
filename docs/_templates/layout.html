@@ -1,9 +1,14 @@
 {% extends "!layout.html" %}
-  {% block footer %} {{ super() }}
+{% block footer %} {{ super() }}
 
-  <style>
-         .wy-nav-content { max-width: none; }
-  </style>
+<style>
+  .wy-nav-content {
+    max-width: none;
+  }
+
+  .wy-nav-side {
+    padding-bottom: 3em;
+  }
+</style>
 
 {% endblock %}
-

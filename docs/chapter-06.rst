@@ -361,16 +361,33 @@ returning the content, unless it is overwritten by another set.
 
 The client can also set/add flash messages by calling:
 
-::
+.. code:: javascript
 
    Q.flash({'message': 'hello world', 'class': 'info'});
 
 py4web defaults to an alert class called ``info`` and most CSS
 frameworks define classes for alerts called ``success``, ``error``,
-``warning``, ``default``, and ``info``. Yet, there is nothing in py4web
-that hardcodes those names. You can use your own class names.
+``warning``, ``default``, and ``info``. 
 
 You can see the basic usage of flash messages in the **examples** app.
+
+**Bootstrap support**
+If bootstrap JS is loaded before utils.js, it will create a formatted
+``bootstrap.Toast`` instead. In that case, 'class' is used for
+``border-{class}`` and ``bg-{class}-subtle``. Additionally, for bootstrap
+toasts a ``title`` can be provided.
+
+To make them work, you should make sure ``<flash-alerts>`` has at least the
+``toast-container`` class.
+
+Full bootstrap ``<flash-alerts>``:
+.. code:: html
+   
+   <flash-alerts class="toast-container position-fixed top-0 end-0 p-3"
+                data-alert="[[=globals().get('flash','')]]">
+   </flash-alerts>
+
+
 
 The Session fixture
 -------------------
