@@ -1,20 +1,22 @@
 /**
  * Utility functions for various common tasks.
  *
- * version 2.0 - 2025.06.03
- * upgrade Vue component registration to Vue3 and Vue.defineAsyncComponent
+ * version 3.0 - 2025.08.29
+ * Add global submit button handling for ajax-component forms
  *
  * This file contains a collection of utility functions that can be used for:
  * - String formatting
- * - DOM manipulation
+ * - DOM helpers
  * - AJAX requests
  * - Cookie handling
  * - Vue component registration
  * - File upload handling
- * - Internationalization
+ * - Internationalization (clientside T object)
  * - Debouncing and throttling functions
  * - Password strength calculation
+ * - Tags inputs
  * - Form handling
+ * - poor-mans htmx with <ajax-component>
  * - Flash message handling
  */
 
@@ -119,9 +121,34 @@ Q.ajax = function (method, url, data, headers) {
     });
 };
 
+/** Asynchronously sends a GET request
+ * @param {String} url - The URL to fetch.
+ * @param {Object} [headers] - The headers to include.
+ * @returns {Promise<{data: string, json: () => any} & Response>} - The fetch promise.
+ */
 Q.get = (url, headers) => Q.ajax("GET", url, null, headers);
+
+/** Asynchronously sends a POST request
+ * @param {String} url - The URL to fetch.
+ * @param {Object} [data] - The data to send.
+ * @param {Object} [headers] - The headers to include.
+ * @returns {Promise<{data: string, json: () => any} & Response>} - The fetch promise.
+ */
 Q.post = (url, data, headers) => Q.ajax("POST", url, data, headers);
+
+/** Asynchronously sends a PUT request
+ * @param {String} url - The URL to fetch.
+ * @param {Object} [data] - The data to send.
+ * @param {Object} [headers] - The headers to include.
+ * @returns {Promise<{data: string, json: () => any} & Response>} - The fetch promise.
+ */
 Q.put = (url, data, headers) => Q.ajax("PUT", url, data, headers);
+
+/** Asynchronously sends a DELETE request
+ * @param {String} url - The URL to fetch.
+ * @param {Object} [headers] - The headers to include.
+ * @returns {Promise<{data: string, json: () => any} & Response>} - The fetch promise.
+ */
 Q.delete = (url, headers) => Q.ajax("DELETE", url, null, headers);
 
 /**
@@ -203,7 +230,7 @@ T.translations = {};
 /**
  * Adds a convenience format method to the client-side translator object
  * @param {String} text - The text to format.
- * @param {Object} [args] - The arguments for formatting.
+ * @param {Object.<string, any>} [args] - The arguments for formatting.
  * @returns {String} - The formatted text.
  */
 T.format = function (text, args) {
@@ -219,7 +246,8 @@ T.format = function (text, args) {
         }
         text = translations[k];
     }
-    return text;
+    // @ts-ignore
+    return text.format(args);
 };
 
 // Originally inspired by  David Walsh (https://davidwalsh.name/javascript-debounce-function)
@@ -373,6 +401,7 @@ Q.tags_input = function (elem_arg, options) {
             item.dataset.value = x;
             item.dataset.selected = "" + (keys.indexOf(x) >= 0);
             repl.appendChild(item);
+            // @ts-ignore
             item.onclick = function (evt) {
                 if (item.dataset.selected == "false") keys.push(x);
                 else
@@ -392,6 +421,7 @@ Q.tags_input = function (elem_arg, options) {
         inp.classList.add(...elem.classList);
         inp.placeholder = options.placeholder;
         inp.setAttribute("list", options.autocomplete_list);
+        // @ts-ignore
         inp.onchange = function (evt) {
             Q.parse_list(inp.value).map(function (x) {
                 x = options.transform(x.trim());
@@ -432,6 +462,7 @@ Q.score_input = function (elem, reference) {
     reference = reference || 100;
     elem.style.backgroundPosition = "center right";
     elem.style.backgroundRepeat = "no-repeat";
+    // @ts-ignore
     elem.onkeyup = elem.onchange = function (evt) {
         var score = Q.score_password(elem.value.trim());
         var r = Math.round(
@@ -453,69 +484,251 @@ Q.score_input = function (elem, reference) {
     };
 };
 
-/** Traps a form submission
- * @param {string} action
- * @param {string} elem_id
- * */
-Q.trap_form = function (action, elem_id) {
-    Q("#" + elem_id + " form:not(.no-form-trap)").forEach(function (
-        /** @type {HTMLFormElement} */ form
-    ) {
-        var target = form.dataset["component_target"] || elem_id;
-        form.dataset["component_target"] = target;
-        var url = form.action;
-        if (url === "" || url === "#" || url === void 0) url = action;
-        var clickable =
-            "input[type=submit], input[type=image], button[type=submit], button:not([type])";
-        form.querySelectorAll(clickable).forEach(function (
-            /** @type {HTMLInputElement}*/ elem
-        ) {
-            elem.onclick = function (event) {
-                event.preventDefault();
-                form.querySelectorAll(clickable).forEach(function (
-                    /** @type {HTMLInputElement}*/ elem
-                ) {
-                    elem.disabled = true;
-                });
-                var form_data = new FormData(form); // Allows file uploads.
-                Q.load_and_trap("POST", url, form_data, target);
-            };
+// Whether the global submit handler event listener has been registered
+Q._globalDelegateActive = false;
+
+/**
+ * Set up delegated event handling for all [data-component-global-submit] buttons, only once per page load.
+ */
+Q._maybeSetupGlobalDelegate = function () {
+    if (Q._globalDelegateActive) return;
+    Q._globalDelegateActive = true;
+
+    document.body.addEventListener("click", function (event) {
+        /** @type {Element|null} */
+        const btn =
+            event.target instanceof Element
+                ? event.target.closest("button[data-component-global-submit]")
+                : null;
+        if (!btn || !(btn instanceof HTMLButtonElement) || btn.disabled) return;
+        event.preventDefault();
+
+        const globalSubmitId = btn.id;
+        if (!globalSubmitId) return;
+
+        /** @type {NodeListOf<HTMLFormElement>} */
+        const forms = document.querySelectorAll(
+            `form[data-global-submit="${globalSubmitId}"]:not(.no-form-trap)`
+        );
+        if (!forms.length) return;
+
+        // Store original state and disable
+        const button_html = {};
+        button_html[globalSubmitId] = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML =
+            button_html[globalSubmitId] + T.format(" (Submitting...)");
+
+        Promise.all(
+            Array.from(forms).map((form) => Q._ajaxSubmitForm(form))
+        ).finally(() => {
+            // Restore original state
+            btn.disabled = false;
+            if (button_html[globalSubmitId]) {
+                btn.innerHTML = button_html[globalSubmitId];
+            }
         });
     });
 };
 
-// loads a component via ajax and traps its forms
+/**
+ * Trap all forms within a component for AJAX submit; tag with data-global-submit if needed.
+ * @param {string} action - fallback POST url if form.action is unused
+ * @param {string} elem_id - html id of the component/container
+ * @param {string} [globalSubmitId] - id of global submit button, if any
+ */
+Q.trap_form = function (action, elem_id, globalSubmitId) {
+    /** @type {NodeListOf<HTMLFormElement>} */
+    const forms =
+        /** @type {NodeListOf<HTMLFormElement>} */
+        (Q(`#${elem_id} form:not(.no-form-trap)`));
+
+    forms.forEach(function (form) {
+        const target = form.dataset.component_target || elem_id;
+        form.dataset.component_target = target;
+        let url = form.action;
+        if (!url || url === "#" || url === void 0) url = action;
+
+        /** @type {NodeListOf<HTMLButtonElement>} */
+        const buttons = form.querySelectorAll(
+            "input[type=submit], input[type=image], button[type=submit], button:not([type])"
+        );
+
+        if (globalSubmitId) {
+            form.setAttribute("data-global-submit", globalSubmitId);
+            // Hide local submits for global forms
+            buttons.forEach((btn) => (btn.style.display = "none"));
+        } else {
+            // Local (per-form) submit:
+            buttons.forEach(function (btn) {
+                btn.style.display = "";
+                btn.onclick = function (event) {
+                    event.preventDefault();
+                    btn.disabled = true;
+                    Q._ajaxSubmitForm(form).finally(function () {
+                        btn.disabled = false;
+                    });
+                };
+            });
+        }
+    });
+    // Enable delegate globally if any component uses a global submit button
+    if (globalSubmitId) Q._maybeSetupGlobalDelegate();
+};
+/**
+ * Check if any form input has been changed from its default values.
+ * Used for trapped ajax forms to skip submitting if nothing changed.
+ *
+ * @param {HTMLFormElement} form
+ * @returns {boolean}
+ */
+Q.is_form_changed = function (form) {
+    return [...form.querySelectorAll("input, textarea, select")].some(
+        /** @param {HTMLInputElement} input */
+        (input) => {
+            if (input.disabled) {
+                return false;
+            }
+            if (input.type === "checkbox" || input.type === "radio") {
+                return input.checked !== input.defaultChecked;
+            }
+            return input.value !== input.defaultValue;
+        }
+    );
+};
+
+/**
+ * AJAX-submit a single form (using POST), disables all its submit buttons while running.
+ * @param {HTMLFormElement} form
+ * @returns {Promise}
+ */
+Q._ajaxSubmitForm = function (form) {
+    const url = form.action || "";
+    const target = form.dataset.component_target || "";
+
+    if (!Q.is_form_changed(form)) {
+        return Promise.reject(new Error("Form was not changed"));
+    }
+    /** @type {NodeListOf<HTMLButtonElement>} */
+    const buttons = form.querySelectorAll(
+        "input[type=submit], input[type=image], button[type=submit], button:not([type])"
+    );
+    buttons.forEach((btn) => (btn.disabled = true));
+    const form_data = new FormData(form);
+    return Q.load_and_trap("POST", url, form_data, target)
+        .catch(function (err) {
+            Q.flash({ message: T.format("Submission error"), class: "danger" });
+            console.error("Form submission failed:", err);
+        })
+        .finally(function () {
+            buttons.forEach((btn) => (btn.disabled = false));
+        });
+};
+
+/**
+ * Load a component via AJAX and trap its forms for AJAX/global submit.
+ * @param {string} method
+ * @param {string} url
+ * @param {FormData|null} form_data
+ * @param {string} target
+ * @returns {Promise<void>}
+ */
 Q.load_and_trap = function (method, url, form_data, target) {
     method = (method || "GET").toLowerCase();
-    /* if target is not there, fill it with something that there isn't in the page*/
-    if (target === void 0 || target === "") target = "none";
-    var onerror = function (res) {
-        alert("ajax error");
-    };
-    Q.ajax(method, url, form_data)
+    if (!target) {
+        Q.flash({
+            message: T.format(
+                `Target element not specified for <code>{url}</code>`,
+                { url }
+            ),
+            class: "danger",
+        });
+    }
+    return Q.ajax(method, url, form_data)
         .then(function (res) {
             if (res.redirected) {
                 window.location.href = res.url;
+                return;
             }
-            Q("#" + target)[0].innerHTML = res.data;
-            Q.trap_form(url, target);
-            var flash = res.headers.get("component-flash");
-            if (flash) Q.flash(JSON.parse(flash));
+            /** @type {HTMLElement|undefined} */
+            const elem = Q("#" + target)[0];
+            if (!elem) {
+                Q.flash({
+                    message: T.format(
+                        `Target element not found: <code>{id}</code>`,
+                        { id: `#${target}` }
+                    ),
+                    class: "danger",
+                });
+                return;
+            }
+            elem.innerHTML = res.data;
+            // trick to make JS in component execute: re-insert the scripts using dom-manipulation
+            // since assigning to innerHTML doesn't run scripts
+            elem.querySelectorAll("script").forEach((s_old) => {
+                const s_new = document.createElement("script");
+
+                [...s_old.attributes].forEach((attr) =>
+                    s_new.setAttribute(attr.name, attr.value)
+                );
+
+                s_new.textContent = s_old.textContent;
+                s_old.replaceWith(s_new);
+            });
+            Q.trap_form(url, target, elem.getAttribute("global-submit"));
+            const flash = res.headers.get("component-flash");
+            if (flash) {
+                try {
+                    Q.flash(JSON.parse(flash));
+                } catch (e) {
+                    Q.flash({ message: flash, class: "info" });
+                }
+            }
         })
-        .catch(onerror);
+        .catch(function (err) {
+            Q.flash({
+                message: T.format("Ajax component error"),
+                class: "danger",
+            });
+            console.error("Ajax component error:", err);
+        });
 };
 
-// Loads all ajax components
+/**
+ * Loads and traps all <ajax-component> blocks on page.
+ * Expects: url, id, and optional global-submit attributes.
+ */
 Q.handle_components = function () {
     Q("ajax-component").forEach(function (elem) {
-        Q.load_and_trap(
-            "GET",
-            elem.attributes.getNamedItem("url").value,
-            null,
-            elem.attributes.getNamedItem("id").value
-        );
+        if (!(elem instanceof HTMLElement)) return;
+        const url = elem.getAttribute("url");
+        const id = elem.getAttribute("id");
+        const globalSubmitId = elem.getAttribute("global-submit");
+        if (!url || !id) {
+            console.error(
+                "<ajax-component> element missing required attributes url and id:",
+                elem
+            );
+            return;
+        }
+        Q.load_and_trap("GET", url, null, id).then(function () {
+            Q.trap_form(url, id, globalSubmitId);
+        });
     });
 };
+
+/**
+ * Programmatically triggers the global submit button by id (simulates click).
+ * @param {string} globalSubmitId
+ */
+Q.triggerGlobalSubmit = function (globalSubmitId) {
+    /** @type {HTMLButtonElement|null} */
+    const btn = /** @type {HTMLButtonElement|null} */ (
+        document.getElementById(globalSubmitId)
+    );
+    if (btn && !btn.disabled) btn.click();
+};
+
 /**
  * @typedef FlashDetails
  * @property {string} message Message for the flash message
@@ -553,7 +766,7 @@ Q.handle_flash = function () {
                         }</strong>
                         <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
                     </div>
-                    <div class=" toast-body">
+                    <div class="toast-body">
                         ${event.detail.message}
                     </div>
                 </div>`;
@@ -590,7 +803,6 @@ Q.handle_flash = function () {
     if (elem) {
         elem.addEventListener("flash", make_handler(elem), false);
         /**
-         *
          * @param {FlashDetails} detail
          */
         Q.flash = function (detail) {
@@ -600,12 +812,20 @@ Q.handle_flash = function () {
     }
 };
 
-Q.handle_components();
-Q.handle_flash();
-Q("input[type=text].type-list-string").forEach(function (elem) {
-    Q.tags_input(elem);
-});
-Q("input[type=text].type-list-integer").forEach(function (elem) {
-    Q.tags_input(elem, { regex: /[-+]?[\d]+/ });
-});
-Q("input[name=password],input[name=new_password]").forEach(Q.score_input);
+// for setup which touches the DOM, ideally set it up upon DOMContentLoaded
+const init = () => {
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", init);
+        return;
+    }
+    Q.handle_components();
+    Q.handle_flash();
+    Q("input[type=text].type-list-string").forEach(function (elem) {
+        Q.tags_input(elem);
+    });
+    Q("input[type=text].type-list-integer").forEach(function (elem) {
+        Q.tags_input(elem, { regex: /[-+]?[\d]+/ });
+    });
+    Q("input[name=password],input[name=new_password]").forEach(Q.score_input);
+};
+init();
