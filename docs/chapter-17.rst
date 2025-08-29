@@ -339,8 +339,13 @@ the components ``global-submit`` attribute.
     Global submit handling will skip forms which have not had their
     inputs changed away from their defaultValue.
 
+
 You can manually trigger this submit button with ``Q.triggerGlobalSubmit``.
-There still needs to be a button, but this allows you to hide it from the user.
+
+The click events for the buttons are handled by a single global event listener. This means you
+can easily add your own event listeners and stop the event from bubbling up. Note that
+``Q.triggerGlobalSubmit`` just sends another click event, so you need to ensure you only stop
+bubbling for the first event.
 
 Global submit handling will attempt to flash error messages.
 These can be translated by setting ``T.translations``.
